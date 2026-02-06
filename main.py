@@ -35,6 +35,7 @@ class ProgressMonitor:
         self._llm_call_count = 0
         self._chunk_done = 0
         self._chunk_total = 0
+        self._batch_info = ""  # 배치 진행률 문자열
 
     def start(self):
         """하트비트 스레드 시작."""
@@ -73,6 +74,10 @@ class ProgressMonitor:
             msg += f" ({label})"
         print(msg)
 
+    def set_batch_info(self, info: str):
+        with self._lock:
+            self._batch_info = info
+
     def set_chunk_progress(self, done: int, total: int):
         with self._lock:
             self._chunk_done = done
@@ -93,13 +98,16 @@ class ProgressMonitor:
                 llm_calls = self._llm_call_count
                 chunk_done = self._chunk_done
                 chunk_total = self._chunk_total
+                batch_info = self._batch_info
 
             elapsed = self._elapsed_total()
             phase_m, phase_s = divmod(int(phase_elapsed), 60)
             parts = [f"  [{elapsed}] ♥ 살아있음"]
             if phase:
                 parts.append(f"현재: {phase} ({phase_m:02d}:{phase_s:02d})")
-            if detail:
+            if batch_info:
+                parts.append(batch_info)
+            elif detail:
                 parts.append(detail)
             parts.append(f"LLM 호출 누적: {llm_calls}회")
             if chunk_total > 0:
@@ -141,25 +149,52 @@ def _install_kggen_hooks():
     _orig_cluster_items = cluster_mod.cluster_items
     @functools.wraps(_orig_cluster_items)
     def _patched_cluster_items(dspy_ref, items, item_type: str = "entities", context: str = ""):
+        total = len(items)
         _monitor.set_phase(
             f"클러스터링: {item_type}",
-            f"대상 {len(items)}개"
+            f"대상 {total}개 (while 루프 최대 {8}회 → 이후 배치 {total//10}~{total//10+10}회 예상)"
         )
         result = _orig_cluster_items(dspy_ref, items, item_type, context)  # type: ignore[arg-type]
         new_items, clusters_dict = result
         _monitor.update_detail(
-            f"  → {item_type} 클러스터링 완료: {len(items)}개 → {len(new_items)}개 대표, {len(clusters_dict)}개 클러스터"
+            f"  → {item_type} 클러스터링 완료: {total}개 → {len(new_items)}개 대표, {len(clusters_dict)}개 클러스터"
         )
         return result
     cluster_mod.cluster_items = _patched_cluster_items
 
     # ── _process_batch 래핑 ──
+    _batch_counter = {"entity_total": 0, "entity_done": 0, "edge_total": 0, "edge_done": 0, "current_type": "entities"}
     _orig_process_batch = cluster_mod._process_batch
     @functools.wraps(_orig_process_batch)
     def _patched_process_batch(batch, clusters, context, validate):
-        _monitor.inc_llm_calls(f"배치 처리 (아이템 {len(batch)}개, 현재 클러스터 {len(clusters)}개)")
+        # context 문자열에서 현재 타입을 추론
+        btype = _batch_counter["current_type"]
+        _batch_counter[f"{btype}_done"] = _batch_counter.get(f"{btype}_done", 0) + 1
+        done = _batch_counter[f"{btype}_done"]
+        total = _batch_counter[f"{btype}_total"]
+        pct = f" ({done*100//total}%)" if total > 0 else ""
+        _monitor.inc_llm_calls(
+            f"배치 {done}/{total}{pct} — {btype} {len(batch)}개 → 클러스터 {len(clusters)}개"
+        )
+        _monitor.set_batch_info(f"배치 {done}/{total}{pct} ({btype})")
         return _orig_process_batch(batch, clusters, context, validate)
     cluster_mod._process_batch = _patched_process_batch
+
+    # ── 원본 cluster_items 내부에서 배치 총 수를 미리 알기 위해 한층 더 래핑 ──
+    # cluster_items → while loop 끝난 뒤 remaining_items를 배치 처리하는데,
+    # 그 시점의 remaining count를 알기 위해 while loop 이후 호출되는 _process_batch의
+    # 첫 호출에서 total을 계산합니다.
+    _orig_cluster_items_inner = cluster_mod.cluster_items  # 이미 패치된 버전
+    @functools.wraps(_orig_cluster_items_inner)
+    def _patched_cluster_items_with_batch_count(dspy_ref, items, item_type: str = "entities", context: str = ""):
+        # 배치 카운터 초기화
+        btype = "entity" if "entit" in item_type else "edge"
+        _batch_counter["current_type"] = btype
+        total_batches = max(1, len(items) // 10 + (1 if len(items) % 10 else 0))
+        _batch_counter[f"{btype}_total"] = total_batches
+        _batch_counter[f"{btype}_done"] = 0
+        return _orig_cluster_items_inner(dspy_ref, items, item_type, context)
+    cluster_mod.cluster_items = _patched_cluster_items_with_batch_count
 
     # ── cluster_graph 래핑 ──
     _orig_cluster_graph = cluster_mod.cluster_graph
