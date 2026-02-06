@@ -162,12 +162,25 @@ def _install_kggen_hooks():
         return result
     cluster_mod.cluster_items = _patched_cluster_items
 
-    # ── _process_batch 래핑 ──
+    # ── _process_batch 래핑 (+ validate=None 버그 수정) ──
     _batch_counter = {"entity_total": 0, "entity_done": 0, "edge_total": 0, "edge_done": 0, "current_type": "entities"}
     _orig_process_batch = cluster_mod._process_batch
     @functools.wraps(_orig_process_batch)
     def _patched_process_batch(batch, clusters, context, validate):
-        # context 문자열에서 현재 타입을 추론
+        # validate=None 버그 수정: while 루프에서 클러스터가 한 번도 성공하지
+        # 못하면 validate가 None인 채로 배치에 진입함.
+        # 이 경우 기존 클러스터 멤버들로 ValidateCluster 시그니처를 동적 생성.
+        if validate is None and clusters:
+            all_members = set()
+            for c in clusters:
+                all_members.update(c.members)
+            if all_members:
+                import dspy as _dspy
+                validate_sig, _ = cluster_mod.get_validate_cluster_sig(all_members)
+                validate = _dspy.Predict(validate_sig)
+                _monitor.update_detail("  ⚠ validate=None 감지 → 동적 생성으로 수정")
+
+        # 배치 진행률 표시
         btype = _batch_counter["current_type"]
         _batch_counter[f"{btype}_done"] = _batch_counter.get(f"{btype}_done", 0) + 1
         done = _batch_counter[f"{btype}_done"]
