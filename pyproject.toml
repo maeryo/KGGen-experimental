@@ -1,0 +1,11 @@
+[project]
+name = "kggen-test-260206"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.13"
+dependencies = [
+    "httpx>=0.28.1",
+    "httpx-sse>=0.4.3",
+    "kg-gen>=0.4.0",
+    "mcp[cli]>=1.26.0",
+]
