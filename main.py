@@ -169,16 +169,18 @@ def _install_kggen_hooks():
     def _patched_process_batch(batch, clusters, context, validate):
         # validate=None 버그 수정: while 루프에서 클러스터가 한 번도 성공하지
         # 못하면 validate가 None인 채로 배치에 진입함.
-        # 이 경우 기존 클러스터 멤버들로 ValidateCluster 시그니처를 동적 생성.
+        # 이 경우 기존 클러스터 대표들로 ValidateCluster 시그니처를 동적 생성.
         if validate is None and clusters:
-            all_members = set()
-            for c in clusters:
-                all_members.update(c.members)
-            if all_members:
-                import dspy as _dspy
-                validate_sig, _ = cluster_mod.get_validate_cluster_sig(all_members)
-                validate = _dspy.Predict(validate_sig)
-                _monitor.update_detail("  ⚠ validate=None 감지 → 동적 생성으로 수정")
+            try:
+                # 대표 이름만 사용 (전체 멤버는 너무 커서 Literal 생성 실패 가능)
+                reps = {c.representative for c in clusters}
+                if reps:
+                    import dspy as _dspy
+                    validate_sig, _ = cluster_mod.get_validate_cluster_sig(reps)
+                    validate = _dspy.Predict(validate_sig)  # type: ignore[arg-type]
+                    _monitor.update_detail("  ⚠ validate=None 감지 → 동적 생성으로 수정")
+            except Exception as e:
+                _monitor.update_detail(f"  ⚠ validate 동적 생성 실패 ({type(e).__name__}), 원본 동작 유지")
 
         # 배치 진행률 표시
         btype = _batch_counter["current_type"]
@@ -190,7 +192,7 @@ def _install_kggen_hooks():
             f"배치 {done}/{total}{pct} — {btype} {len(batch)}개 → 클러스터 {len(clusters)}개"
         )
         _monitor.set_batch_info(f"배치 {done}/{total}{pct} ({btype})")
-        return _orig_process_batch(batch, clusters, context, validate)
+        return _orig_process_batch(batch, clusters, context, validate)  # type: ignore[arg-type]
     cluster_mod._process_batch = _patched_process_batch
 
     # ── 원본 cluster_items 내부에서 배치 총 수를 미리 알기 위해 한층 더 래핑 ──
