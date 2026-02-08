@@ -124,6 +124,7 @@ def _install_kggen_hooks():
     import kg_gen.steps._1_get_entities as ent_mod
     import kg_gen.steps._2_get_relations as rel_mod
     import kg_gen.steps._3_cluster_graph as cluster_mod
+    import kg_gen.kg_gen as kg_gen_mod  # kg_gen.kg_gen 모듈도 패치 필요!
 
     # ── get_entities 래핑 ──
     _orig_get_entities = ent_mod.get_entities
@@ -134,6 +135,7 @@ def _install_kggen_hooks():
         _monitor.update_detail(f"  → 엔티티 {len(result)}개 추출됨")
         return result
     ent_mod.get_entities = _patched_get_entities
+    kg_gen_mod.get_entities = _patched_get_entities  # kg_gen.kg_gen 모듈에도 패치!
 
     # ── get_relations 래핑 ──
     _orig_get_relations = rel_mod.get_relations
@@ -144,6 +146,7 @@ def _install_kggen_hooks():
         _monitor.update_detail(f"  → 관계 {len(result)}개 추출됨")
         return result
     rel_mod.get_relations = _patched_get_relations
+    kg_gen_mod.get_relations = _patched_get_relations  # kg_gen.kg_gen 모듈에도 패치!
 
     # ── cluster_items 래핑 ──
     _orig_cluster_items = cluster_mod.cluster_items
