@@ -8,4 +8,5 @@ dependencies = [
     "httpx-sse>=0.4.3",
     "kg-gen>=0.4.0",
     "mcp[cli]>=1.26.0",
+    "neo4j>=5.0.0",
 ]
